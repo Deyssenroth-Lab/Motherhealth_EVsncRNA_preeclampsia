@@ -20,9 +20,12 @@ most abundant snRNA features were miRNA (n=150), Other (n=143), piRNA
 (n=173), rRNA (n=123), and tRNA (n=230). CIBERSORT was conducted to
 ennumerate EV cell-type contributions using a published miRNA tissue
 reference dataset(Srinivasan et al., 2020; <PMID:32864636>) Differential
-expression of 26 snRNAs were identified at an FDR \< 0.05 comparing
+expression of 41 snRNAs were identified at an FDR \< 0.05 comparing
 preeclampsia cases vs. controls, adjusting for 3 surrogate variables ,
-gestational age, and maternal BMI.
+gestational age, and maternal BMI. Gene Ontology Enrichment Pathway
+analysis was performed on the top differentially expressed miRNAs
+(let7f-5p, miR143-p, miR335-5p,
+miR27a-p,miR26b-5p,miR20a-5p,miR146a-5p).
 
 ## Load Covariate data
 
@@ -247,13 +250,8 @@ RNA_profile
 ![](EV_sncRNAseq_manuscript_files/figure-gfm/rna_subtype-1.png)<!-- -->
 
 ``` r
-pdf("../../Manuscript/Plots/Figure1_sRNAbiotypes.pdf")
-RNA_profile
-dev.off()
+ggsave("../../Manuscript/Plots/Figure1_sRNAbiotypes.tiff", plot = RNA_profile, device = "tiff",dpi = 300,width=6,height=4,units="in")
 ```
-
-    ## png 
-    ##   2
 
 ## Normalize
 
@@ -296,13 +294,8 @@ top.gene.plot
 ![](EV_sncRNAseq_manuscript_files/figure-gfm/top_expressed-1.png)<!-- -->
 
 ``` r
-pdf("../../Manuscript/Plots/Figure2_top.expressed.loci.pdf",width=10)
-top.gene.plot
-dev.off()
+ggsave("../../Manuscript/Plots/Figure2_top.expressed.loci.tiff", plot = top.gene.plot, device = "tiff",dpi = 300,width=10,height=4,units="in")
 ```
-
-    ## png 
-    ##   2
 
 ## Conduct surrogate variable analysis
 
@@ -397,7 +390,7 @@ mirDecon_PE_plot<-ggplot(mirDecon_long, aes(x = Tissue, y = Value,fill = Group))
 
 ## combine in a single figure
 figure_3<-ggarrange(mirDecon_tissue_plot, mirDecon_PE_plot,
-                    labels = c("A", "B"),
+                    labels = c("a", "b"),
                     ncol = 2, nrow = 1)
 
 figure_3
@@ -406,13 +399,8 @@ figure_3
 ![](EV_sncRNAseq_manuscript_files/figure-gfm/cibersort-1.png)<!-- -->
 
 ``` r
-pdf("../../Manuscript/Plots/Figure3_mirDecon_combined.pdf",height=3,width=8)
-figure_3
-dev.off()
+ggsave("../../Manuscript/Plots/Figure3_mirDecon_combined.tiff", plot = figure_3, device = "tiff",dpi = 450,width=6,height=3,units="in")
 ```
-
-    ## png 
-    ##   2
 
 ## Conduct differential gene expression analysis with respect to preeclampsia, including gestational age, BMI, and SVs as covariates
 
@@ -513,69 +501,344 @@ res_volcano_05
 ![](EV_sncRNAseq_manuscript_files/figure-gfm/DEG-1.png)<!-- -->
 
 ``` r
-pdf("../../Manuscript/Plots/Figure4_volcano_preeclampsia_adjdemoSVs_sRNAsubset.pdf")
-res_volcano_05
-dev.off()
+ggsave("../../Manuscript/Plots/Figure4_volcano_preeclampsia_adjdemoSVs_sRNAsubset.tiff", plot = res_volcano_05, device = "tiff",dpi = 300, width=4,height=4,units = "in")
+
+write.csv(res,"../../Manuscript/Tables/SupplementalTable1_res_preeclampsia_adjdemoSVs_sRNAsubset.csv")
 ```
 
-    ## png 
-    ##   2
+## Gene Ontology enrichment function
 
 ``` r
-write.csv(res,"../../Manuscript/output/SupplementalTable1b_res_preeclampsia_adjdemoSVs_sRNAsubset.csv")
-```
-
-## Gene Ontology enrichment
-
-``` r
-multimir_miR335_results<-get_multimir(org="hsa",
-                                   mirna="hsa-miR-335-5p",
-                                   table='validated',
-                                   summary=TRUE)
-```
-
-    ## Searching mirecords ...
-    ## Searching mirtarbase ...
-    ## Searching tarbase ...
-
-``` r
-miR335_targets<-multimir_miR335_results@data%>%
-  distinct(mature_mirna_id,target_symbol,.keep_all = TRUE)
-
-listEnrichrSites()
-setEnrichrSite("Enrichr") # Human genes
-websiteLive <- TRUE
-dbs <- listEnrichrDbs()
-
-
-dbs<-c("GO_Molecular_Function_2015","GO_Cellular_Component_2015", "GO_Biological_Process_2015","KEGG")
-if (websiteLive) {
-    enriched <- enrichr(miR335_targets$target_symbol, dbs)
+analyze_mirna_targets <- function(mirna_list, 
+                                  species = "hsa", 
+                                  prediction_type = "predicted",
+                                  stringency="min") {
+  # Get predicted miRNA targets from multiple databases using multiMiR
+   predicted_targets <- get_multimir(
+    org = species,
+    mirna = mirna_list,
+    table = "predicted",
+    summary = TRUE
+  )
+  
+  # Count number of databases predicting each target
+  pred_summary <- table(predicted_targets@data$target_symbol)
+  
+  # Select predicted targets based on stringency
+  predicted_genes <- switch(stringency,
+    "high" = names(pred_summary[pred_summary >= 3]),  # In 3+ databases
+    "medium" = names(pred_summary[pred_summary >= 2]), # In 2+ databases
+    "min" = names(pred_summary)  # All predicted targets
+  )
+  
+  # Extract target genes
+  target_genes <- unique(predicted_genes)
+  
+  # Perform GO enrichment analysis
+  go_bp <- enrichr(
+    target_genes,
+    "GO_Biological_Process_2015"
+  )
+  
+   # Create results list
+  results <- list(
+    GO_biological_process = go_bp$GO_Biological_Process_2015,
+    targets=predicted_targets@summary
+    )
+    return(results)
 }
 ```
 
+# Gene Ontology enrichment
+
+``` r
+#let-7f-5p
+mirnas <- c("hsa-let-7f-5p")
+results <- analyze_mirna_targets(mirnas)
+```
+
+    ## Searching diana_microt ...
+    ## Searching elmmo ...
+    ## Searching microcosm ...
+    ## Searching miranda ...
+    ## Searching mirdb ...
+    ## Searching pictar ...
+    ## Searching pita ...
+    ## Searching targetscan ...
     ## Uploading data to Enrichr... Done.
-    ##   Querying GO_Molecular_Function_2015... Done.
-    ##   Querying GO_Cellular_Component_2015... Done.
     ##   Querying GO_Biological_Process_2015... Done.
-    ##   Querying KEGG... Done.
     ## Parsing results... Done.
 
 ``` r
-if (websiteLive) {
-    plotEnrich(enriched[[3]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value",title="GO biological processes enriched among miR-335-5p targets")
-}
+print(head(results$GO_biological_process))  # Check what this contains
 ```
 
-![](EV_sncRNAseq_manuscript_files/figure-gfm/GO-1.png)<!-- -->
+    ##                                                      Term Overlap      P.value
+    ## 1                 collagen catabolic process (GO:0030574)   22/74 1.480514e-05
+    ## 2 multicellular organismal catabolic process (GO:0044243)   23/80 1.752730e-05
+    ## 3   cellular response to amino acid stimulus (GO:0071230)   16/45 1.822170e-05
+    ## 4             neurotrophin signaling pathway (GO:0038179)  55/278 2.611587e-05
+    ## 5         negative regulation of translation (GO:0017148)   21/72 3.163771e-05
+    ## 6 multicellular organismal metabolic process (GO:0044236)   25/94 3.342673e-05
+    ##   Adjusted.P.value Old.P.value Old.Adjusted.P.value Odds.Ratio Combined.Score
+    ## 1       0.01929348           0                    0   3.330365       37.03544
+    ## 2       0.01929348           0                    0   3.176845       34.79202
+    ## 3       0.01929348           0                    0   4.337110       47.33044
+    ## 4       0.01929348           0                    0   1.951362       20.59266
+    ## 5       0.01929348           0                    0   3.240059       33.57077
+    ## 6       0.01929348           0                    0   2.853160       29.40511
+    ##                                                                                                                                                                                                                                                                                                                                     Genes
+    ## 1                                                                                                                                                                            COL15A1;COL14A1;MMP1;COL11A1;COL12A1;MMP8;COL19A1;COL1A1;MMP11;ADAMTS14;COL3A1;ADAMTS3;COL1A2;ADAM15;COL4A2;COL4A1;COL5A2;COL4A6;COL9A1;COL4A5;COL6A6;COL9A3
+    ## 2                                                                                                                                                                      ENPEP;COL15A1;COL14A1;MMP1;COL11A1;COL12A1;MMP8;COL19A1;COL1A1;MMP11;ADAMTS14;COL3A1;ADAMTS3;COL1A2;ADAM15;COL4A2;COL4A1;COL5A2;COL4A6;COL9A1;COL4A5;COL6A6;COL9A3
+    ## 3                                                                                                                                                                                                                                  DNMT3A;IPO5;COL1A1;COL3A1;CPEB1;SOCS1;COL1A2;CDH1;COL4A1;COL5A2;RRAGD;DNMT3B;COL4A6;CPEB3;BCL2L1;CPEB4
+    ## 4 CD86;CDKN1A;IRS1;ITSN1;IRS2;PCSK5;ARHGAP4;FGF5;RPS6KA3;MCF2L;CASP3;PSENEN;DUSP4;VAV3;MEF2C;DUSP3;CHUK;RIPK2;FRS2;NRG1;NGF;DUSP6;DUSP7;ADCY9;CREB1;PIK3CA;PRKAR1A;ARHGEF7;SOS2;CRK;HBEGF;SHC3;RALB;SHC1;PDGFB;ITPR3;NRAS;MAPK8;PRKAR2A;THEM4;RICTOR;LINGO1;NTRK3;STAT3;NR4A1;MAPK11;RIT2;AGO3;AGO4;AGO1;RPS6KB2;MDM2;CALM1;TNRC6A;TNRC6B
+    ## 5                                                                                                                                                                                                        TRIM71;BTG2;TIA1;CELF1;DAPK1;FMR1;YBX2;TSC1;SYNCRIP;ILF3;CPEB1;AGO3;AGO4;AGO1;CAPRIN2;IGF2BP1;IGF2BP3;IGF2BP2;CPEB3;CPEB2;TNRC6A
+    ## 6                                                                                                                                                            ENPEP;COL15A1;COL14A1;COL11A1;COL12A1;TRAM2;COL19A1;GHR;ADAMTS14;ADAMTS3;MMP1;MMP8;COL1A1;MMP11;COL3A1;COL1A2;ADAM15;COL4A2;COL4A1;COL5A2;COL4A6;COL9A1;COL4A5;COL6A6;COL9A3
 
 ``` r
-pdf("../../Manuscript/Plots/GO_miR-335-5p.pdf",width=10)
-if (websiteLive) {
-    plotEnrich(enriched[[3]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value",title="GO biological processes enriched among miR-335-5p targets")
-}
-dev.off()
+str(results$GO_biological_process)  
 ```
 
-    ## png 
-    ##   2
+    ## 'data.frame':    4655 obs. of  9 variables:
+    ##  $ Term                : chr  "collagen catabolic process (GO:0030574)" "multicellular organismal catabolic process (GO:0044243)" "cellular response to amino acid stimulus (GO:0071230)" "neurotrophin signaling pathway (GO:0038179)" ...
+    ##  $ Overlap             : chr  "22/74" "23/80" "16/45" "55/278" ...
+    ##  $ P.value             : num  1.48e-05 1.75e-05 1.82e-05 2.61e-05 3.16e-05 ...
+    ##  $ Adjusted.P.value    : num  0.0193 0.0193 0.0193 0.0193 0.0193 ...
+    ##  $ Old.P.value         : int  0 0 0 0 0 0 0 0 0 0 ...
+    ##  $ Old.Adjusted.P.value: int  0 0 0 0 0 0 0 0 0 0 ...
+    ##  $ Odds.Ratio          : num  3.33 3.18 4.34 1.95 3.24 ...
+    ##  $ Combined.Score      : num  37 34.8 47.3 20.6 33.6 ...
+    ##  $ Genes               : chr  "COL15A1;COL14A1;MMP1;COL11A1;COL12A1;MMP8;COL19A1;COL1A1;MMP11;ADAMTS14;COL3A1;ADAMTS3;COL1A2;ADAM15;COL4A2;COL"| __truncated__ "ENPEP;COL15A1;COL14A1;MMP1;COL11A1;COL12A1;MMP8;COL19A1;COL1A1;MMP11;ADAMTS14;COL3A1;ADAMTS3;COL1A2;ADAM15;COL4"| __truncated__ "DNMT3A;IPO5;COL1A1;COL3A1;CPEB1;SOCS1;COL1A2;CDH1;COL4A1;COL5A2;RRAGD;DNMT3B;COL4A6;CPEB3;BCL2L1;CPEB4" "CD86;CDKN1A;IRS1;ITSN1;IRS2;PCSK5;ARHGAP4;FGF5;RPS6KA3;MCF2L;CASP3;PSENEN;DUSP4;VAV3;MEF2C;DUSP3;CHUK;RIPK2;FRS"| __truncated__ ...
+
+``` r
+letf7_GO<-results$GO_biological_process
+letf7_GO_adj<-letf7_GO%>%filter(Adjusted.P.value<0.05)%>%mutate(mirna="hsa-let-7f-5p")
+
+#miR-20a-5p
+mirnas <- c("hsa-miR-20a-5p")
+results <- analyze_mirna_targets(mirnas)
+```
+
+    ## Searching diana_microt ...
+    ## Searching elmmo ...
+    ## Searching microcosm ...
+    ## Searching miranda ...
+    ## Searching mirdb ...
+    ## Searching pictar ...
+    ## Searching pita ...
+    ## Searching targetscan ...
+    ## Uploading data to Enrichr... Done.
+    ##   Querying GO_Biological_Process_2015... Done.
+    ## Parsing results... Done.
+
+``` r
+miR20a_GO<-results$GO_biological_process
+miR20a_GO_adj<-miR20a_GO%>%filter(Adjusted.P.value<0.05)%>%mutate(mirna="hsa-miR-20a-5p")
+
+#miR-26a-5p
+mirnas <- c("hsa-miR-26b-5p")
+results <- analyze_mirna_targets(mirnas)
+```
+
+    ## Searching diana_microt ...
+    ## Searching elmmo ...
+    ## Searching microcosm ...
+    ## Searching miranda ...
+    ## Searching mirdb ...
+    ## Searching pictar ...
+    ## Searching pita ...
+    ## Searching targetscan ...
+    ## Uploading data to Enrichr... Done.
+    ##   Querying GO_Biological_Process_2015... Done.
+    ## Parsing results... Done.
+
+``` r
+miR26b_GO<-results$GO_biological_process
+miR26b_GO_adj<-miR26b_GO%>%filter(Adjusted.P.value<0.05)%>%mutate(mirna="hsa-miR-26b-5p")
+
+#miR-143-3p
+mirnas <- c("hsa-miR-143-3p")
+results <- analyze_mirna_targets(mirnas)
+```
+
+    ## Searching diana_microt ...
+    ## Searching elmmo ...
+    ## Searching microcosm ...
+    ## Searching miranda ...
+    ## Searching mirdb ...
+    ## Searching pictar ...
+    ## Searching pita ...
+    ## Searching targetscan ...
+    ## Uploading data to Enrichr... Done.
+    ##   Querying GO_Biological_Process_2015... Done.
+    ## Parsing results... Done.
+
+``` r
+miR143_GO<-results$GO_biological_process
+miR143_GO_adj<-miR143_GO%>%filter(Adjusted.P.value<0.05)%>%mutate(mirna="hsa-miR-143-3p")
+
+#miR-146a-5p
+mirnas <- c("hsa-miR-146a-5p")
+results <- analyze_mirna_targets(mirnas)
+```
+
+    ## Searching diana_microt ...
+    ## Searching elmmo ...
+    ## Searching microcosm ...
+    ## Searching miranda ...
+    ## Searching mirdb ...
+    ## Searching pictar ...
+    ## Searching pita ...
+    ## Searching targetscan ...
+    ## Uploading data to Enrichr... Done.
+    ##   Querying GO_Biological_Process_2015... Done.
+    ## Parsing results... Done.
+
+``` r
+miR146_GO<-results$GO_biological_process
+miR146_GO_adj<-miR146_GO%>%filter(Adjusted.P.value<0.05)%>%mutate(mirna="hsa-miR-146a-5p")
+
+#miR-335-5p
+mirnas <- c("hsa-miR-335-5p")
+results <- analyze_mirna_targets(mirnas)
+```
+
+    ## Searching diana_microt ...
+    ## Searching elmmo ...
+    ## Searching microcosm ...
+    ## Searching miranda ...
+    ## Searching mirdb ...
+    ## Searching pictar ...
+    ## Searching pita ...
+    ## Searching targetscan ...
+    ## Uploading data to Enrichr... Done.
+    ##   Querying GO_Biological_Process_2015... Done.
+    ## Parsing results... Done.
+
+``` r
+miR335_GO<-results$GO_biological_process
+miR335_GO_adj<-miR335_GO%>%filter(Adjusted.P.value<0.05)%>%mutate(mirna="hsa-miR-335-5p")
+
+
+#miR-27a-p
+mirnas <- c("hsa-miR-27a-3p")
+results <- analyze_mirna_targets(mirnas)
+```
+
+    ## Searching diana_microt ...
+    ## Searching elmmo ...
+    ## Searching microcosm ...
+    ## Searching miranda ...
+    ## Searching mirdb ...
+    ## Searching pictar ...
+    ## Searching pita ...
+    ## Searching targetscan ...
+    ## Uploading data to Enrichr... Done.
+    ##   Querying GO_Biological_Process_2015... Done.
+    ## Parsing results... Done.
+
+``` r
+miR27a_GO<-results$GO_biological_process
+miR27a_GO_adj<-miR27a_GO%>%filter(Adjusted.P.value<0.05)%>%mutate(mirna="hsa-miR-27a-3p")
+```
+
+## GO summary
+
+``` r
+Total_GO<-rbind(letf7_GO_adj,miR143_GO_adj,miR146_GO_adj,miR20a_GO_adj,miR26b_GO_adj,miR27a_GO_adj,miR335_GO_adj)
+
+Total_GO<-Total_GO%>%
+  dplyr::select(mirna,Term,Overlap,P.value,Adjusted.P.value,Odds.Ratio,Combined.Score,Genes)
+
+head(Total_GO)
+```
+
+    ##           mirna                                                    Term Overlap
+    ## 1 hsa-let-7f-5p                 collagen catabolic process (GO:0030574)   22/74
+    ## 2 hsa-let-7f-5p multicellular organismal catabolic process (GO:0044243)   23/80
+    ## 3 hsa-let-7f-5p   cellular response to amino acid stimulus (GO:0071230)   16/45
+    ## 4 hsa-let-7f-5p             neurotrophin signaling pathway (GO:0038179)  55/278
+    ## 5 hsa-let-7f-5p         negative regulation of translation (GO:0017148)   21/72
+    ## 6 hsa-let-7f-5p multicellular organismal metabolic process (GO:0044236)   25/94
+    ##        P.value Adjusted.P.value Odds.Ratio Combined.Score
+    ## 1 1.480514e-05       0.01929348   3.330365       37.03544
+    ## 2 1.752730e-05       0.01929348   3.176845       34.79202
+    ## 3 1.822170e-05       0.01929348   4.337110       47.33044
+    ## 4 2.611587e-05       0.01929348   1.951362       20.59266
+    ## 5 3.163771e-05       0.01929348   3.240059       33.57077
+    ## 6 3.342673e-05       0.01929348   2.853160       29.40511
+    ##                                                                                                                                                                                                                                                                                                                                     Genes
+    ## 1                                                                                                                                                                            COL15A1;COL14A1;MMP1;COL11A1;COL12A1;MMP8;COL19A1;COL1A1;MMP11;ADAMTS14;COL3A1;ADAMTS3;COL1A2;ADAM15;COL4A2;COL4A1;COL5A2;COL4A6;COL9A1;COL4A5;COL6A6;COL9A3
+    ## 2                                                                                                                                                                      ENPEP;COL15A1;COL14A1;MMP1;COL11A1;COL12A1;MMP8;COL19A1;COL1A1;MMP11;ADAMTS14;COL3A1;ADAMTS3;COL1A2;ADAM15;COL4A2;COL4A1;COL5A2;COL4A6;COL9A1;COL4A5;COL6A6;COL9A3
+    ## 3                                                                                                                                                                                                                                  DNMT3A;IPO5;COL1A1;COL3A1;CPEB1;SOCS1;COL1A2;CDH1;COL4A1;COL5A2;RRAGD;DNMT3B;COL4A6;CPEB3;BCL2L1;CPEB4
+    ## 4 CD86;CDKN1A;IRS1;ITSN1;IRS2;PCSK5;ARHGAP4;FGF5;RPS6KA3;MCF2L;CASP3;PSENEN;DUSP4;VAV3;MEF2C;DUSP3;CHUK;RIPK2;FRS2;NRG1;NGF;DUSP6;DUSP7;ADCY9;CREB1;PIK3CA;PRKAR1A;ARHGEF7;SOS2;CRK;HBEGF;SHC3;RALB;SHC1;PDGFB;ITPR3;NRAS;MAPK8;PRKAR2A;THEM4;RICTOR;LINGO1;NTRK3;STAT3;NR4A1;MAPK11;RIT2;AGO3;AGO4;AGO1;RPS6KB2;MDM2;CALM1;TNRC6A;TNRC6B
+    ## 5                                                                                                                                                                                                        TRIM71;BTG2;TIA1;CELF1;DAPK1;FMR1;YBX2;TSC1;SYNCRIP;ILF3;CPEB1;AGO3;AGO4;AGO1;CAPRIN2;IGF2BP1;IGF2BP3;IGF2BP2;CPEB3;CPEB2;TNRC6A
+    ## 6                                                                                                                                                            ENPEP;COL15A1;COL14A1;COL11A1;COL12A1;TRAM2;COL19A1;GHR;ADAMTS14;ADAMTS3;MMP1;MMP8;COL1A1;MMP11;COL3A1;COL1A2;ADAM15;COL4A2;COL4A1;COL5A2;COL4A6;COL9A1;COL4A5;COL6A6;COL9A3
+
+``` r
+write.csv(Total_GO,"../../Manuscript/Tables/SupplementalTable2a_GO.csv")
+
+GO_summary <- Total_GO %>%
+  group_by(Term) %>%
+  summarise(
+    Count = n(),  
+    miRNAs = paste(unique(mirna), collapse = ", "),  # Concatenate unique miRNAs
+    common_genes = { 
+      gene_lists <- strsplit(Genes, ";")  # Split gene targets into lists
+      common <- Reduce(intersect, gene_lists)  # Find common genes across miRNAs
+      paste(common, collapse = ", ")  # Concatenate common genes
+    }
+  ) %>%
+  arrange(desc(Count)) 
+
+head(GO_summary)
+```
+
+    ## # A tibble: 6 × 4
+    ##   Term                                                      Count miRNAs commo…¹
+    ##   <chr>                                                     <int> <chr>  <chr>  
+    ## 1 neurotrophin TRK receptor signaling pathway (GO:0048011)      5 hsa-l… CREB1,…
+    ## 2 neurotrophin signaling pathway (GO:0038179)                   5 hsa-l… CREB1,…
+    ## 3 posttranscriptional regulation of gene expression (GO:00…     5 hsa-l… SYNCRI…
+    ## 4 axon guidance (GO:0007411)                                    4 hsa-l… CREB1,…
+    ## 5 cellular component morphogenesis (GO:0032989)                 4 hsa-m… HOXA13…
+    ## 6 chromatin modification (GO:0016568)                           4 hsa-m… MECP2,…
+    ## # … with abbreviated variable name ¹​common_genes
+
+``` r
+write.csv(GO_summary,"../../Manuscript/Tables/SupplementalTable2b_GO.csv")
+```
+
+## Plot miR27a GO terms
+
+``` r
+miR27a_plot<-miR27a_GO_adj %>%
+  arrange(P.value)%>%
+  slice_head(n=10)%>%
+  mutate(NegLogP = -log10(P.value))%>%
+  ggplot(., aes(x = Odds.Ratio, y = reorder(Term, NegLogP), fill = NegLogP)) +
+  geom_point(shape=21,size=6)+
+  scale_fill_gradient(low = "blue", high = "red") +  # Color gradient
+  xlim(1,5)+
+  theme_minimal() +
+    theme(
+      axis.title.y = element_blank(),
+      axis.text = element_text(size = 10),
+      panel.grid.major = element_line(color = "grey90"),
+      panel.grid.minor = element_blank(),
+      legend.position = "right",
+      plot.margin = margin(1, 1, 1, 1, "cm")
+    ) +
+  labs(
+    x = "Odds Ratio",
+    fill = "-log10(P-value)"
+  )
+
+miR27a_plot
+```
+
+![](EV_sncRNAseq_manuscript_files/figure-gfm/miR27a_GO_plot-1.png)<!-- -->
+
+``` r
+ggsave("../../Manuscript/Plots/Figure5_GO_miR27a.tiff", plot = miR27a_plot, device = "tiff",dpi = 450,width=7,height=4,units="in")
+```
