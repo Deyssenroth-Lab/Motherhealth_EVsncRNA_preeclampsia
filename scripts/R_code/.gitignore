@@ -1,0 +1,7 @@
+# Ignore working scripts and output
+*.rds
+*.RMD
+
+# Ignore R temporary files
+.Rhistory
+.Rsubread_featureCouunts_pie15328
