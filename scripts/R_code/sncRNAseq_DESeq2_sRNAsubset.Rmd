@@ -1,0 +1,1179 @@
+---
+title: "sncRNAseq_DESeq2_sRNAsubset"
+author: "Maya Deyssenroth"
+date: "2023-06-15"
+editor_options: 
+  chunk_output_type: console
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(readxl)
+library(lubridate)
+library(gtsummary)
+library(Rsubread)
+library(fs)
+library(tximeta)
+library(rtracklayer)
+library(RColorBrewer)
+library(pheatmap)
+library(purrr)
+library(stringr)
+library(DESeq2)
+library(biomaRt)
+library(sva)
+library(ggrepel)
+library(purrr)
+library(UpSetR)
+library(miRNAtap)
+library(topGO)
+library(org.Hs.eg.db)
+library(VennDiagram)
+library(enrichR)
+library(multiMiR)
+```
+
+## R Markdown
+
+Small RNAsequencing was performed on small RNA extracted from extracellular vesicles from plasma collected postpartum from inviduals who experienced preeclampsia with postpartum headache (n=13), preeclampsia without postpartum headache (n=13), and normotensive individuals (n=13) Extracellular vesicles were isolated from Motherhealth plasma samples using the Izon SEC platform. RNA was extracted using the miRNeasy isolation kit.  Out of 39 samples sent to RealSeq for small RNAseq, 35 were successfully sequenced.  FASTQ files were received with adapters trimmed.  The reads were aligned using STAR version 2.7.10b using the gencode v43 human reference genome (hg38). Counts were generated using the featureCounts function of Rsubread 2.12.3 and annotated for sRNA using the ITAS database (62703 elements detected). Low abundant reads were filtered with a cutoff of mean count > 5, with 22960 elements remaining (https://www.mdpi.com/1422-0067/24/4/4195).  The data was filtered, normalized, and assessed for differential expression analysis using DESeq2. Filtering criteria were implemented to drop lowly expressed features (based on rowMeans < 0.05), retaining 22904 features. The most abundant feature biotypes were protein-coding genes (n=15,736), lncRNA (n=4735), and pseudogenes (n=1809).  Small-noncoding RNA, including miRNA (n=111), snRNA (n=46), snoRNA (n=14), scRNA (n=1), and sRNA (n=1) were also detected. Differential expression of 8 features were identified at an FDR < 0.05 comparing preeclampsia cases vs. controls, adjusting for collection time.  Two loci were upregulated (hsa-miR-335-5p, rRNA-hsa-dup24-sep-1257) and 6 were downregulation (hsa-piR-32870,tRNA-Phe-GAA-5-1, 5S-dup22-seq-658, hsa-piR-5019,hsa-piR-32859,hsa-piR-32989). Additionally adjusted for 3 surrogate variables, 50 differentially expressed loci are identified.  hsa-miR-335-5p remains the top most differentially expressed.
+
+C19MC coordinates were obtained from the Bentwich et al., 2005 paper (https://www.nature.com/articles/ng1590) and converted to hg38 coordinates using UCSC genome browser (chr19:53666679-53766338);
+
+Workflow for snRNA annotation using ITAS: https://github.com/EpiEpiMSU/ITAS (Stupnikov et al., 2022: https://www.mdpi.com/2311-553X/8/3/30).
+Compiled databases include miRbase (miRNA), GtRNAdb (tRNA),
+
+## load Covariate data
+```{r}
+#plasma1<-read_excel("../../../Data/Inventory/Plasma/SampleTransfer_UpdatedECVs.xlsx")
+#plasma2<-read_excel("../../../Data/Inventory/Plasma/SampleTransfer_UpdatedECVs_032823.xlsx")
+
+Covariates<-readRDS("../../../Data/Covariates/Covariates_pilot.rds")
+
+#seqid<-read_excel("../../../Data/RNAseq/Genohub_3272746_Sequencing_Metrics.xlsx")
+```
+
+# find file locations of bam files
+```{r bam_location}
+
+# Function to recursively search for files with specific extensions
+find_files <- function(directory, extensions) {
+  files <- dir_ls(directory, recurse = TRUE)
+  filtered_files <- files[str_detect(files, paste0("\\.", extensions, "$"))]
+  as.character(filtered_files)
+}
+
+# path to directory
+directory <- "../../../Data/RNAseq/STAR/STAR_align_clean"
+
+# Replace with the directory you want to search in
+extensions <- c("bam")     # Replace with the desired extensions
+
+file_locations <- find_files(directory, extensions)
+print(file_locations)
+
+file.exists(file_locations)
+
+#35 files
+```
+
+## reformat covariate data
+```{r}
+#seqid<-seqid%>%
+#  dplyr::select(`RealSeq ID`,`Customer ID`)%>%
+#  dplyr::rename(seqid=`RealSeq ID`,SID= `Customer ID`)%>%
+#  filter(grepl("RSB",seqid))%>%
+#  separate(seqid,c("seqid1","seqid2"))%>%
+#  mutate(seqid=paste0(seqid1,"-",seqid2),
+#        seqid2=str_pad(seqid2,2,pad="0"),
+#         SID=as.character(SID),
+#         bam=paste0(seqid1,"-",seqid2,"Aligned.sortedByCoord.out.bam"))
+  
+
+#plasma1<-plasma1%>%
+#  dplyr::select(names(plasma2))%>%
+#  drop_na()%>%
+#  mutate(`Participant Group`=ifelse(`Participant Group`=="Control","Normotensive","Preeclampsia"))
+
+#plasma2<-plasma2%>%
+#  drop_na()
+
+#Covariates<-rbind(plasma1,plasma2)
+
+#Covariates<-Covariates%>%
+#  mutate(blood_collect=as.Date(`Maternal Blood Collection Time`),
+#         delivery_date=as.Date(`Date of Delivery`),
+#         Collection_interval=difftime(ymd(blood_collect),ymd(delivery_date),units="days"),
+#         Collection_interval=as.numeric(str_remove(Collection_interval," days")),
+#         SID=as.character(SID),
+#         Group=as.factor(`Participant Group`),
+#         Headache=as.factor(Headache),
+#         combined_group=factor(paste0(Group,"_",Headache)))%>%
+#    dplyr::select(SID,Group,Headache,combined_group,Collection_interval)
+
+#Covariates<-Covariates%>%
+#  right_join(seqid %>% dplyr::select(SID,seqid,bam))
+  
+
+#Covariates<-Covariates[match(basename(file_locations),Covariates$bam),]
+
+Covariates<-Covariates%>%
+  mutate(Race2=factor(ifelse(Race.ethnicity=="Non-Hispanic White","Non-Hispanic White","Other")))
+
+str(Covariates)
+
+```
+
+
+## demotable
+```{r demo}
+demo_preeclampsia<-Covariates%>%
+  dplyr::select(-c(SID,seqid,bam,combined_group,Headache))%>%
+tbl_summary(
+    by = Group,
+    statistic = list(all_continuous()  ~ "{mean} ({sd})",
+                     all_categorical() ~ "{n}    ({p}%)"),
+    digits = list(all_continuous()  ~ c(2, 2),
+                  all_categorical() ~ c(0, 1)),
+    type = list(Collection_interval ~ "continuous",
+                BMI ~ "categorical",
+                Race.ethnicity ~ "categorical",
+                delivery_mode ~ "categorical",
+                Gest.age ~ "continuous"),
+    label  = list(Collection_interval ~ "Time to collection (days)",
+                BMI ~ "BMI at Delivery",
+                Race.ethnicity ~ "Race/ethnicity",
+                delivery_mode ~ "Delivery Mode",
+                Gest.age ~ "Gestational age (weeks)")
+  ) %>%
+  add_p(pvalue_fun = ~ style_pvalue(.x, digits = 2)) %>%
+  modify_header(label = "**Variable**",
+                all_stat_cols() ~ "**{level}**<br>N = {n} ({style_percent(p, digits=1)}%)") %>%
+  bold_labels() %>%
+  modify_caption("<div style='text-align: left; font-weight: bold;'> Participant characteristics by Preeclampsia status</div>")
+
+knitr::knit_print(demo_preeclampsia)
+
+demo_preeclampsia%>%
+ as_gt() %>% # convert to gt table
+  gt::gtsave( # save table as image
+    filename = "Tables/Table1_preeclampsia.png"
+  )
+
+
+demo_headache<-Covariates%>%
+  dplyr::select(-c(SID,seqid,bam,Headache,Group))%>%
+tbl_summary(
+    by = combined_group,
+    statistic = list(all_continuous()  ~ "{mean} ({sd})",
+                     all_categorical() ~ "{n}    ({p}%)"),
+    digits = list(all_continuous()  ~ c(2, 2),
+                  all_categorical() ~ c(0, 1)),
+    type = list(Collection_interval ~ "continuous",
+                BMI ~ "categorical",
+                Race.ethnicity ~ "categorical",
+                delivery_mode ~ "categorical",
+                Gest.age ~ "continuous"),
+    label  = list(Collection_interval ~ "Time to collection (days)",
+                BMI ~ "BMI at Delivery",
+                Race.ethnicity ~ "Race/ethnicity",
+                delivery_mode ~ "Delivery Mode",
+                Gest.age ~ "Gestational age (weeks)")
+  ) %>%
+  add_p(pvalue_fun = ~ style_pvalue(.x, digits = 2)) %>%
+  modify_header(label = "**Variable**",
+                all_stat_cols() ~ "**{level}**<br>N = {n} ({style_percent(p, digits=1)}%)") %>%
+  bold_labels() %>%
+  modify_caption("<div style='text-align: left; font-weight: bold;'> Participant characteristics by Preeclampsia and Headache status</div>")
+
+demo_headache%>%
+ as_gt() %>% # convert to gt table
+  gt::gtsave( # save table as image
+    filename = "Tables/Table1_headache.png"
+  )
+```
+
+## count features and annotate snRNAs
+```{r}
+#snrna only
+gtffile <- file.path("../../../Data/RNAseq/ITAS/Integrated_annotation/human/human_allRNA/human_allRNA.gtf")
+
+fc<-featureCounts(files=file_locations, 
+                  annot.ext=gtffile, 
+                  isGTFAnnotationFile = TRUE, 
+                  GTF.featureType = "exon", 
+                  GTF.attrType = "transcript_id", 
+                  minFragLength=15,
+                  isPairedEnd=FALSE)
+```
+
+## create DESeq2 dataset
+```{r}
+dds<-DESeqDataSetFromMatrix(countData=fc$counts,
+                            colData=Covariates,
+                            design= ~ Gest.age + BMI + Group)
+
+dds
+#class: DESeqDataSet 
+#dim: 18948 35 
+#metadata(1): version
+#assays(1): counts
+#rownames(18948): 5S_1675 5S_1676 ... tRX-Val-NNN-4-1 tRX-Val-NNN-5-1
+#rowData names(0):
+#colnames(35): RSB477-01Aligned.sortedByCoord.out.bam RSB477-02Aligned.sortedByCoord.out.bam ...
+#  RSB478-23Aligned.sortedByCoord.out.bam RSB478-24Aligned.sortedByCoord.out.bam
+#colData names(7): SID Group ... seqid bam
+
+all(colnames(dds)==dds$bam) #TRUE
+
+```
+
+## Pre-filtering
+```{r}
+#keep1 <- rowSums(counts(dds)) >= 10
+#summary(keep1) #50102
+#dds <- dds[keep,]
+
+keep<-rowMeans(counts(dds)) >5
+summary(keep) #819
+dds<-dds[keep,]
+```
+
+## RNA species
+```{r}
+#label RNA species
+txdb_dds<-counts(dds)
+  
+txdb_dds<-txdb_dds%>%
+  as.data.frame()%>%
+  rownames_to_column("Gene")%>%
+  mutate(TXTYPE=factor(ifelse(grepl("hsa-let|hsa-miR",Gene),"miRNA",
+                            ifelse(grepl("piR",Gene),"piRNA",
+                                   ifelse(grepl("rRNA",Gene),"rRNA",
+                                      ifelse(grepl("tRNA",Gene),"tRNA","Other"))))))%>%
+  dplyr::select(Gene,TXTYPE)
+
+summary(factor(txdb_dds$TXTYPE))
+#miRNA Other piRNA  rRNA  tRNA 
+#  150   143   173   123   230
+
+
+RNA_profile<-ggplot(txdb_dds, aes(reorder(TXTYPE,TXTYPE,function(x)-length(x))))+
+  geom_bar()+
+  theme_bw()+
+  geom_text(stat = "count", aes(label = after_stat(count)),vjust=-1)+
+  scale_y_continuous(expand=expansion(mult=c(0,0.15)))+
+  theme(axis.title=element_blank(),
+    axis.text.x=element_text(angle=45,hjust=1,vjust=1))
+
+RNA_profile
+
+pdf("QC/Plots/biotypes_sRNAsubset.pdf")
+RNA_profile
+dev.off()
+```
+
+
+## normalize and perform DGE
+```{r dds, warning=FALSE}
+dds<-DESeq(dds)
+```
+
+
+## explore data visualization
+```{r}
+#transform for visualization
+vsd <- varianceStabilizingTransformation(dds, blind = TRUE)
+
+#Sample distance
+sampleDists <- dist(t(assay(vsd)))
+sampleDistMatrix <- as.matrix( sampleDists )
+rownames(sampleDistMatrix) <- paste( vsd$seqID, vsd$combined_group, sep = "_" )
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+
+sample_heatmap<-pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDists,
+         clustering_distance_cols = sampleDists,
+         col = colors)
+
+sample_heatmap
+
+pdf("QC/Plots/heatmap_sRNAsubset.pdf")
+sample_heatmap
+dev.off()
+
+#PCA
+pcaData <- plotPCA(vsd, intgroup = c( "Group","combined_group","Collection_interval","BMI","delivery_mode","Gest.age","Race.ethnicity"), returnData = TRUE)
+pcaData<-pcaData%>%
+  mutate(Collection_interval=factor(ifelse(Collection_interval>2,">2",Collection_interval),levels=c("0","1","2",">2")),
+         Gest.age=ifelse(Gest.age<37,"Preterm","Term"))
+
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+PCA_case<-ggplot(pcaData, aes(x = PC1, y = PC2, color = Group)) +
+  geom_point(size =3) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  coord_fixed() +
+  theme_bw()+
+  #geom_text(data=subset(pcaData, PC1 < -20),vjust=0,hjust=0)+
+  scale_colour_manual(values=c("#377EB8","#E41A1C"))+
+  ggtitle("PCA with VST data by case status")
+
+PCA_case
+
+pdf("QC/Plots/pca_case_sRNAsubset.pdf")
+PCA_case
+dev.off()
+
+PCA_combined<-ggplot(pcaData, aes(x = PC1, y = PC2, color = combined_group)) +
+  geom_point(size =3) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  coord_fixed() +
+  theme_bw()+
+  #geom_text(data=subset(pcaData, PC1 < -20),vjust=0,hjust=0)+
+  scale_colour_manual(values=c("#377EB8","#FF7F00","#E41A1C"))+
+  ggtitle("PCA with VST data by combined case status")
+
+PCA_combined
+
+pdf("QC/Plots/pca_combined_case_sRNAsubset.pdf")
+PCA_combined
+dev.off()
+
+PCA_collection<-ggplot(pcaData, aes(x = PC1, y = PC2, color = Collection_interval)) +
+  geom_point(size =3) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  coord_fixed() +
+  theme_bw()+
+  #geom_text(data=subset(pcaData, PC1 < -20),vjust=0,hjust=0)+
+  scale_colour_brewer(palette="Spectral")+
+  ggtitle("PCA with VST data by blood collection time from delivery")
+
+PCA_collection
+
+pdf("QC/Plots/pca_bloodcollect_sRNAsubset.pdf")
+PCA_combined
+dev.off()
+
+
+PCA_BMI<-ggplot(pcaData, aes(x = PC1, y = PC2, color = BMI)) +
+  geom_point(size =3) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  coord_fixed() +
+  theme_bw()+
+  #geom_text(data=subset(pcaData, PC1 < -20),vjust=0,hjust=0)+
+  scale_colour_manual(values=c("#377EB8","#E41A1C"))+
+  ggtitle("PCA with VST data by delivery BMI")
+
+PCA_BMI
+
+pdf("QC/Plots/pca_BMI_sRNAsubset.pdf")
+PCA_BMI
+dev.off()
+
+PCA_delivery<-ggplot(pcaData, aes(x = PC1, y = PC2, color = delivery_mode)) +
+  geom_point(size =3) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  coord_fixed() +
+  theme_bw()+
+  #geom_text(data=subset(pcaData, PC1 < -20),vjust=0,hjust=0)+
+  scale_colour_manual(values=c("#377EB8","#E41A1C"))+
+  ggtitle("PCA with VST data by delivery mode")
+
+PCA_delivery
+
+pdf("QC/Plots/pca_DM_sRNAsubset.pdf")
+PCA_delivery
+dev.off()
+
+
+PCA_GA<-ggplot(pcaData, aes(x = PC1, y = PC2, color = Gest.age)) +
+  geom_point(size =3) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  coord_fixed() +
+  theme_bw()+
+  #geom_text(data=subset(pcaData, PC1 < -20),vjust=0,hjust=0)+
+  scale_colour_manual(values=c("#377EB8","#E41A1C"))+
+  ggtitle("PCA with VST data by Preterm status")
+
+PCA_GA
+
+pdf("QC/Plots/pca_GA_sRNAsubset.pdf")
+PCA_GA
+dev.off()
+
+
+PCA_Race<-ggplot(pcaData, aes(x = PC1, y = PC2, color = Race.ethnicity)) +
+  geom_point(size =3) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  coord_fixed() +
+  theme_bw()+
+  #geom_text(data=subset(pcaData, PC1 < -20),vjust=0,hjust=0)+
+  ggtitle("PCA with VST data by Race/ethnicity")
+
+PCA_Race
+
+pdf("QC/Plots/pca_Race_sRNAsubset.pdf")
+PCA_Race
+dev.off()
+
+
+```
+
+## top most expressed genes
+```{r}
+select<-order(rowMeans(counts(dds,normalized=TRUE)),
+                decreasing=TRUE)[1:25]
+
+top.genes<-assay(vsd)[select,]
+
+top.genes%>%
+  as_tibble(.,rownames=NA)%>%
+  rownames_to_column(var="sRNA")%>%
+  pivot_longer(-c("sRNA"),names_to="ID", values_to="counts")%>%
+  group_by(sRNA)%>%
+  ggplot(.,aes(x=fct_reorder(sRNA, counts, .fun = median, .desc =TRUE),y=counts))+
+  geom_boxplot(fill="grey60")+
+  theme_bw()+
+  theme(axis.title.x=element_blank(),
+        axis.text=element_text(angle=45,vjust=1,hjust=1))+
+  labs(y="Normalized counts")
+```
+
+
+## C19MC profile
+```{r}
+#restrict to miRNAs
+
+txdb_miRNA<-txdb_dds[txdb_dds$TXTYPE=="miRNA",]
+txdb_miRNA<-txdb_miRNA%>%
+  mutate(mirbase_id=str_remove(Gene,"-3p|-5p"))%>%
+  distinct(mirbase_id,.keep_all=TRUE)
+
+ensembl = useMart("ensembl",dataset="hsapiens_gene_ensembl")
+
+miRNA_location<-getBM(attributes=c('mirbase_id', 'chromosome_name',"start_position","end_position"), 
+      filters = 'mirbase_id', 
+      values = txdb_miRNA$mirbase_id, 
+      mart = ensembl)
+
+miRNA_location<-miRNA_location%>%
+  dplyr::rename(start="start_position",end="end_position")%>%
+  mutate(chromosome_name=paste0("chr",chromosome_name))
+
+miRNA_gr<-makeGRangesFromDataFrame(miRNA_location,
+                         keep.extra.columns=TRUE,
+                         ignore.strand=FALSE,
+                         seqinfo=NULL,
+                         seqnames.field=c("chromosome_name"),
+                         start.field="start",
+                         end.field="end")
+
+C19MC_gr<-  GRanges(
+    seqnames = "chr19",
+    ranges = IRanges(53666679, 53766338))
+
+intersect(miRNA_gr, C19MC_gr) #no overlap with C19MC
+```
+
+
+## conduct surrogate variable analysis
+```{r SVA}
+dat  <- getVarianceStabilizedData(dds)
+idx  <- rowMeans(dat) > 1 #all
+dat  <- dat[idx, ]
+mod <- model.matrix(~Gest.age + BMI + Group,colData(dds))
+mod0 <- model.matrix(~   1, colData(dds))
+
+n.sv <- num.sv(dat,mod,method="be") #3
+svseq <- svaseq(dat, mod, mod0, n.sv = 3)
+
+ddssva <- dds
+ddssva$SV1 <- svseq$sv[,1]
+ddssva$SV2 <- svseq$sv[,2]
+ddssva$SV3 <- svseq$sv[,3]
+
+
+## save SV data
+SVs=svseq$sv
+colnames(SVs) <- paste0("SV",seq(1:3))
+rownames(SVs)<-dds$SID
+write.csv(SVs,"../../../Data/Covariates/SVs_sRNAsubset.csv")
+
+## save vst-normalized data
+saveRDS(dat,"normalized_data/vst.RDS")
+
+```
+
+
+## conduct differential gene expression analysis with respect to preeclampsia including Gestational age and BMI as covariates
+```{r}
+
+design(dds) <- ~ Gest.age + BMI + Collection_interval  + Group
+
+dds<-DESeq(dds)
+
+res <- results(dds,contrast=c("Group","Preeclampsia","Normotensive"))
+res<-res[order(res$pvalue),]
+res
+summary(res)
+sum(res$padj < 0.05, na.rm=TRUE) #9933
+
+res<-as.data.frame(res)
+
+res<-res%>%
+  rownames_to_column(var="gene_id")
+
+## volcano plot
+res_volcano_05<-res%>%
+  mutate(sig=factor(ifelse(padj < 0.05,"sig","not.sig")))%>%
+  drop_na(padj)%>%
+  ggplot(aes(x=log2FoldChange, y=-log10(padj), colour=sig,label=gene_id))+
+  geom_point(alpha=0.5) +
+  scale_color_manual(values=c("black", "red")) +
+  geom_text_repel(aes(label=ifelse(padj<0.05,as.character(gene_id),"")),max.overlaps=30)+
+  geom_hline(yintercept=-log10(0.05), linetype="dashed") +
+  geom_vline(xintercept=c(-1.5, 1.5), linetype="dashed") +
+  labs(x=bquote(~Log[2] ~ "fold change"),y=bquote(~-Log[10] ~ "Adj.P-value"),title="Preeclampsia DEGs adjusted for GA age, BMI, blood collection interval (sRNA subset)")+
+  theme_bw()+
+  theme(panel.border = element_blank(),
+        axis.line = element_line(color = 'black',size=1),
+        panel.grid.major = element_line(linewidth = (1.2)),
+        panel.grid.minor=element_line(),
+        axis.title=element_text(size=14,face="bold"),
+        axis.text=element_text(size=12),
+        legend.position = "none")
+
+pdf("DESeq2/Plots/volcano_preeclampsia_adjbloodGABMI_sRNAsubset.pdf",width=8)
+res_volcano_05
+dev.off()
+
+saveRDS(res,"DESeq2/res_preeclampsia_adjbloodGABMI_sRNAsubset.rds")
+```
+
+
+## conduct differential gene expression analysis with respect to preeclampsia, including gestational age, BMI, blood collection time and SVs as covariates
+```{r}
+
+SVs<-read.csv("../../../Data/Covariates/SVs_sRNAsubset.csv")
+dds$SV1=SVs$SV1
+dds$SV2=SVs$SV2
+dds$SV3=SVs$SV3
+
+design(dds) <- ~ Gest.age + BMI + Collection_interval + SV1 + SV2 + SV3 + Group
+
+dds<-DESeq(dds)
+
+res <- results(dds,contrast=c("Group","Preeclampsia","Normotensive"))
+res<-res[order(res$pvalue),]
+res
+summary(res)
+sum(res$padj < 0.05, na.rm=TRUE) #38
+
+res<-as.data.frame(res)
+
+res<-res%>%
+  rownames_to_column(var="gene_id")
+
+## volcano plot
+res_volcano_05<-res%>%
+  mutate(sig=factor(ifelse(padj < 0.05,"sig","not.sig")))%>%
+  drop_na(padj)%>%
+  ggplot(aes(x=log2FoldChange, y=-log10(padj), colour=sig,label=gene_id))+
+  geom_point(alpha=0.5) +
+  scale_color_manual(values=c("black", "red")) +
+  geom_text_repel(aes(label=ifelse(padj<0.05,as.character(gene_id),"")),max.overlaps=20)+
+  geom_hline(yintercept=-log10(0.05), linetype="dashed") +
+  geom_vline(xintercept=c(-1.5, 1.5), linetype="dashed") +
+  labs(x=bquote(~Log[2] ~ "fold change"),y=bquote(~-Log[10] ~ "Adj.P-value"),title="Preeclampsia DEGs adjusted for GA, BMI, blood collection interval and surrogate variables (sRNA subset)")+
+  theme_bw()+
+  theme(panel.border = element_blank(),
+        axis.line = element_line(color = 'black',size=1),
+        panel.grid.major = element_line(linewidth = (1.2)),
+        panel.grid.minor=element_line(),
+        axis.title=element_text(size=14,face="bold"),
+        axis.text=element_text(size=12),
+        legend.position = "none")
+
+pdf("DESeq2/Plots/volcano_preeclampsia_adjdemoSVs_sRNAsubset.pdf")
+res_volcano_05
+dev.off()
+
+saveRDS(res,"DESeq2/res_preeclampsia_adjdemoSVs_sRNAsubset.rds")
+```
+
+
+## conduct differential gene expression analysis with respect to preeclampsia and headache status, including collection interval as covariates
+```{r}
+design(dds) <- ~ Gest.age + BMI + Collection_interval  + combined_group
+
+dds<-DESeq(dds)
+
+res_headache <- results(dds,contrast=c("combined_group","Preeclampsia_Yes","Normotensive_No"))
+res_headache<-res_headache[order(res_headache$pvalue),]
+res_headache
+summary(res_headache)
+sum(res_headache$padj < 0.05, na.rm=TRUE) #20
+
+res_headache<-as.data.frame(res_headache)
+
+res_headache<-res_headache%>%
+  rownames_to_column(var="gene_id")
+
+## volcano plot
+res_volcano_05<-res_headache%>%
+  mutate(sig=factor(ifelse(padj < 0.05,"sig","not.sig")))%>%
+  drop_na(padj)%>%
+  ggplot(aes(x=log2FoldChange, y=-log10(padj), colour=sig,label=gene_id))+
+  geom_point(alpha=0.5) +
+  scale_color_manual(values=c("black", "red")) +
+  geom_text_repel(aes(label=ifelse(padj<0.05,as.character(gene_id),"")),max.overlaps=20)+
+  geom_hline(yintercept=-log10(0.05), linetype="dashed") +
+  geom_vline(xintercept=c(-1.5, 1.5), linetype="dashed") +
+  labs(x=bquote(~Log[2] ~ "fold change"),y=bquote(~-Log[10] ~ "Adj.P-value"),title="Preeclampsia headache DEGs adjusted for GA, BMI, and blood collection interval (sRNA subset)")+
+  theme_bw()+
+  theme(panel.border = element_blank(),
+        axis.line = element_line(color = 'black',size=1),
+        panel.grid.major = element_line(linewidth = (1.2)),
+        panel.grid.minor=element_line(),
+        axis.title=element_text(size=14,face="bold"),
+        axis.text=element_text(size=12),
+        legend.position = "none")
+
+pdf("DESeq2/Plots/volcano_preeclampsia_headache_adjbloodGABMI_sRNAsubset.pdf")
+res_volcano_05
+dev.off()
+
+saveRDS(res_headache,"DESeq2/res_preeclampsia_headache_adjbloodGABMI_sRNAsubset.rds")
+
+
+
+res_noheadache <- results(dds,contrast=c("combined_group","Preeclampsia_No","Normotensive_No"))
+res_noheadache<-res_noheadache[order(res_noheadache$pvalue),]
+res_noheadache
+summary(res_noheadache)
+sum(res_noheadache$padj < 0.05, na.rm=TRUE) #83
+
+res_noheadache<-as.data.frame(res_noheadache)
+
+res_noheadache<-res_noheadache%>%
+  rownames_to_column(var="gene_id")
+
+## volcano plot
+res_volcano_05<-res_noheadache%>%
+  mutate(sig=factor(ifelse(padj < 0.05,"sig","not.sig")))%>%
+  drop_na(padj)%>%
+  ggplot(aes(x=log2FoldChange, y=-log10(padj), colour=sig,label=gene_id))+
+  geom_point(alpha=0.5) +
+  scale_color_manual(values=c("black", "red")) +
+  geom_text_repel(aes(label=ifelse(padj<0.05,as.character(gene_id),"")),max.overlaps=30)+
+  geom_hline(yintercept=-log10(0.05), linetype="dashed") +
+  geom_vline(xintercept=c(-1.5, 1.5), linetype="dashed") +
+  labs(x=bquote(~Log[2] ~ "fold change"),y=bquote(~-Log[10] ~ "Adj.P-value"),title="Preeclampsia no headache DEGs adjusted for GA, BMI, and blood collection interval(sRNA subset)")+
+  theme_bw()+
+  theme(panel.border = element_blank(),
+        axis.line = element_line(color = 'black',size=1),
+        panel.grid.major = element_line(linewidth = (1.2)),
+        panel.grid.minor=element_line(),
+        axis.title=element_text(size=14,face="bold"),
+        axis.text=element_text(size=12),
+        legend.position = "none")
+
+pdf("DESeq2/Plots/volcano_preeclampsia_noheadache_aadjbloodGABMI_sRNAsubset.pdf")
+res_volcano_05
+dev.off()
+
+saveRDS(res_noheadache,"DESeq2/res_preeclampsia_noheadache_adjbloodGABMI_sRNAsubset.rds")
+
+
+res_case <- results(dds,contrast=c("combined_group","Preeclampsia_Yes","Preeclampsia_No"))
+res_case<-res_case[order(res_case$pvalue),]
+res_case
+summary(res_case)
+sum(res_case$padj < 0.05, na.rm=TRUE) #0
+
+res_case<-as.data.frame(res_case)
+
+res_case<-res_case%>%
+  rownames_to_column(var="gene_id")
+
+## volcano plot
+res_volcano_05<-res_case%>%
+  mutate(sig=factor(ifelse(padj < 0.05,"sig","not.sig")))%>%
+  drop_na(padj)%>%
+  ggplot(aes(x=log2FoldChange, y=-log10(padj), colour=sig,label=gene_id))+
+  geom_point(alpha=0.5) +
+  scale_color_manual(values=c("black", "red")) +
+  geom_text_repel(aes(label=ifelse(padj<0.05,as.character(gene_id),"")),max.overlaps=20)+
+  geom_hline(yintercept=-log10(0.05), linetype="dashed") +
+  geom_vline(xintercept=c(-1.5, 1.5), linetype="dashed") +
+  labs(x=bquote(~Log[2] ~ "fold change"),y=bquote(~-Log[10] ~ "Adj.P-value"),title="Preeclampsia DEGs adjusted for GA, BMI, and blood collection interval (sRNA subset)")+
+  theme_bw()+
+  theme(panel.border = element_blank(),
+        axis.line = element_line(color = 'black',size=1),
+        panel.grid.major = element_line(linewidth = (1.2)),
+        panel.grid.minor=element_line(),
+        axis.title=element_text(size=14,face="bold"),
+        axis.text=element_text(size=12),
+        legend.position = "none")
+
+pdf("DESeq2/Plots/volcano_preeclampsia_case_adjGABMIblood_sRNAsubset.pdf")
+res_volcano_05
+dev.off()
+
+saveRDS(res_case,"DESeq2/res_preeclampsia_case_adjGABMIblood_sRNAsubset.rds")
+
+```
+
+## conduct differential gene expression analysis with respect to preeclampsia and headache status, including demo and SVs as covariates
+```{r}
+design(dds) <- ~ Gest.age + BMI + Collection_interval + SV1 + SV2 + SV3 + combined_group
+
+dds<-DESeq(dds)
+
+res_headache <- results(dds,contrast=c("combined_group","Preeclampsia_Yes","Normotensive_No"))
+res_headache<-res_headache[order(res_headache$pvalue),]
+res_headache
+summary(res_headache)
+sum(res_headache$padj < 0.05, na.rm=TRUE) #25
+
+res_headache<-as.data.frame(res_headache)
+
+res_headache<-res_headache%>%
+  rownames_to_column(var="gene_id")
+
+## volcano plot
+res_volcano_05<-res_headache%>%
+  mutate(sig=factor(ifelse(padj < 0.05,"sig","not.sig")))%>%
+  drop_na(padj)%>%
+  ggplot(aes(x=log2FoldChange, y=-log10(padj), colour=sig,label=gene_id))+
+  geom_point(alpha=0.5) +
+  scale_color_manual(values=c("black", "red")) +
+  geom_text_repel(aes(label=ifelse(padj<0.05,as.character(gene_id),"")),max.overlaps=20)+
+  geom_hline(yintercept=-log10(0.05), linetype="dashed") +
+  geom_vline(xintercept=c(-1.5, 1.5), linetype="dashed") +
+  labs(x=bquote(~Log[2] ~ "fold change"),y=bquote(~-Log[10] ~ "Adj.P-value"),title="Preeclampsia headache DEGs adjusted for GA, BMI, blood collection interval and SVs (sRNA subset)")+
+  theme_bw()+
+  theme(panel.border = element_blank(),
+        axis.line = element_line(color = 'black',size=1),
+        panel.grid.major = element_line(linewidth = (1.2)),
+        panel.grid.minor=element_line(),
+        axis.title=element_text(size=14,face="bold"),
+        axis.text=element_text(size=12),
+        legend.position = "none")
+
+pdf("DESeq2/Plots/volcano_preeclampsia_headache_adjdemoSVs_sRNAsubset.pdf")
+res_volcano_05
+dev.off()
+
+saveRDS(res_headache,"DESeq2/res_preeclampsia_headache_adjdemoSVs_sRNAsubset.rds")
+
+
+
+res_noheadache <- results(dds,contrast=c("combined_group","Preeclampsia_No","Normotensive_No"))
+res_noheadache<-res_noheadache[order(res_noheadache$pvalue),]
+res_noheadache
+summary(res_noheadache)
+sum(res_noheadache$padj < 0.05, na.rm=TRUE) #42
+
+res_noheadache<-as.data.frame(res_noheadache)
+
+res_noheadache<-res_noheadache%>%
+  rownames_to_column(var="gene_id")
+
+## volcano plot
+res_volcano_05<-res_noheadache%>%
+  mutate(sig=factor(ifelse(padj < 0.05,"sig","not.sig")))%>%
+  drop_na(padj)%>%
+  ggplot(aes(x=log2FoldChange, y=-log10(padj), colour=sig,label=gene_id))+
+  geom_point(alpha=0.5) +
+  scale_color_manual(values=c("black", "red")) +
+  geom_text_repel(aes(label=ifelse(padj<0.05,as.character(gene_id),"")),max.overlaps=20)+
+  geom_hline(yintercept=-log10(0.05), linetype="dashed") +
+  geom_vline(xintercept=c(-1.5, 1.5), linetype="dashed") +
+  labs(x=bquote(~Log[2] ~ "fold change"),y=bquote(~-Log[10] ~ "Adj.P-value"),title="Preeclampsia headache DEGs adjusted for GA, BMI, blood collection interval and SVs (sRNA subset)")+
+  theme_bw()+
+  theme(panel.border = element_blank(),
+        axis.line = element_line(color = 'black',size=1),
+        panel.grid.major = element_line(linewidth = (1.2)),
+        panel.grid.minor=element_line(),
+        axis.title=element_text(size=14,face="bold"),
+        axis.text=element_text(size=12),
+        legend.position = "none")
+
+pdf("DESeq2/Plots/volcano_preeclampsia_noheadache_adjdemoSVs_sRNAsubset.pdf")
+res_volcano_05
+dev.off()
+
+saveRDS(res_noheadache,"DESeq2/res_preeclampsia_noheadache_adjdemoSVs_sRNAsubset.rds")
+
+
+res_case <- results(dds,contrast=c("combined_group","Preeclampsia_Yes","Preeclampsia_No"))
+res_case<-res_case[order(res_case$pvalue),]
+res_case
+summary(res_case)
+sum(res_case$padj < 0.05, na.rm=TRUE) #0
+
+res_case<-as.data.frame(res_case)
+
+res_case<-res_case%>%
+  rownames_to_column(var="gene_id")
+
+## volcano plot
+res_volcano_05<-res_case%>%
+  mutate(sig=factor(ifelse(padj < 0.05,"sig","not.sig")))%>%
+  drop_na(padj)%>%
+  ggplot(aes(x=log2FoldChange, y=-log10(padj), colour=sig,label=gene_id))+
+  geom_point(alpha=0.5) +
+  scale_color_manual(values=c("black", "red")) +
+  geom_text_repel(aes(label=ifelse(padj<0.05,as.character(gene_id),"")),max.overlaps=20)+
+  geom_hline(yintercept=-log10(0.05), linetype="dashed") +
+  geom_vline(xintercept=c(-1.5, 1.5), linetype="dashed") +
+  labs(x=bquote(~Log[2] ~ "fold change"),y=bquote(~-Log[10] ~ "Adj.P-value"),title="Preeclampsia DEGs adjusted for GA, BMI, blood collection interval and SVs (sRNA subset)")+
+  theme_bw()+
+  theme(panel.border = element_blank(),
+        axis.line = element_line(color = 'black',size=1),
+        panel.grid.major = element_line(linewidth = (1.2)),
+        panel.grid.minor=element_line(),
+        axis.title=element_text(size=14,face="bold"),
+        axis.text=element_text(size=12),
+        legend.position = "none")
+
+pdf("DESeq2/Plots/volcano_preeclampsia_case_adjdemoSVs_sRNAsubset.pdf")
+res_volcano_05
+dev.off()
+
+saveRDS(res_case,"DESeq2/res_preeclampsia_case_adjdemoSVs_sRNAsubset.rds")
+```
+
+
+## overlap in DESEQ2 hits (upset)
+```{r}
+overall<-readRDS("DESeq2/res_preeclampsia_adjbloodGABMI_sRNAsubset.rds")
+overall_SV<-readRDS("DESeq2/res_preeclampsia_adjdemoSVs_sRNAsubset.rds")
+headache<-readRDS("DESeq2/res_preeclampsia_headache_adjbloodGABMI_sRNAsubset.rds")
+headache_SV<-readRDS("DESeq2/res_preeclampsia_headache_adjdemoSVs_sRNAsubset.rds")
+noheadache<-readRDS("DESeq2/res_preeclampsia_noheadache_adjbloodGABMI_sRNAsubset.rds")
+noheadache_SV<-readRDS("DESeq2/res_preeclampsia_noheadache_adjdemoSVs_sRNAsubset.rds")
+
+
+
+# Original code
+list.DFs <- list(overall, overall_SV, headache, headache_SV, noheadache, noheadache_SV)
+list.DFs <- map(list.DFs, ~filter(.x, padj < 0.05))
+
+# Modified code to name the dataframes
+filtered_list <- setNames(list.DFs, c("overall", "overall_SV", "headache", "headache_SV", "noheadache", "noheadache_SV"))
+
+# Extract gene_ids from each named dataframe
+filtered_gene_ids <- lapply(filtered_list, function(df) df$gene_id)
+
+
+listInput <- list(overall=filtered_gene_ids$overall,overall_SV=filtered_gene_ids$overall_SV,headache=filtered_gene_ids$headache,headache_SV=filtered_gene_ids$headache_SV,noheadache=filtered_gene_ids$noheadache,noheadache_SV=filtered_gene_ids$noheadache_SV)
+
+upset(fromList(listInput), order.by = "freq")
+
+
+listInput <- list(overall=filtered_gene_ids$overall_SV,headache=filtered_gene_ids$headache_SV,noheadache=filtered_gene_ids$noheadache_SV)
+
+upset(fromList(listInput), order.by = "freq")
+
+```
+
+## overlap venn diagram
+```{r}
+myCol <- brewer.pal(3, "Pastel2")
+
+venn.diagram(x = list(filtered_gene_ids$overall_SV, filtered_gene_ids$headache_SV, filtered_gene_ids$noheadache_SV),
+        category.names = c("Overall" , "Headache" , "No Headache"),
+        filename = 'DESeq2/Plots/VennDiagram_adjdemoSVs_sRNAsubset.png',
+        output=TRUE,
+        
+        # Output features
+        imagetype="png" ,
+        height = 480 , 
+        width = 480 , 
+        resolution = 300,
+        compression = "lzw",
+        
+        # Circles
+        lwd = 2,
+        lty = 'blank',
+        fill = myCol,
+        
+        # Numbers
+        cex = .6,
+        fontface = "bold",
+        fontfamily = "sans",
+        
+        # Set names
+        cat.cex = 0.5,
+        cat.fontface = "bold",
+        cat.default.pos = "outer",
+        cat.pos = c(-20, 20, 135),
+        cat.dist = c(0.055, 0.055, 0.085),
+        cat.fontfamily = "sans",
+        rotation = 1
+)
+
+venn.diagram(x = list(filtered_gene_ids$overall, filtered_gene_ids$headache, filtered_gene_ids$noheadache),
+        category.names = c("Overall" , "Headache" , "No Headache"),
+        filename = 'DESeq2/Plots/VennDiagram_adjbloodGABMI_sRNAsubset.png',
+        output=TRUE,
+        
+        # Output features
+        imagetype="png" ,
+        height = 480 , 
+        width = 480 , 
+        resolution = 300,
+        compression = "lzw",
+        
+        # Circles
+        lwd = 2,
+        lty = 'blank',
+        fill = myCol,
+        
+        # Numbers
+        cex = .6,
+        fontface = "bold",
+        fontfamily = "sans",
+        
+        # Set names
+        cat.cex = 0.5,
+        cat.fontface = "bold",
+        cat.default.pos = "outer",
+        cat.pos = c(-20, 20, 135),
+        cat.dist = c(0.055, 0.055, 0.085),
+        cat.fontfamily = "sans",
+        rotation = 1
+)
+```
+
+## Gene Ontology enrichment
+```{r}
+#overall_hits
+overall_hits<-overall_SV%>%
+  filter(padj<0.05)%>%
+  pull(gene_id)
+
+multimir_overall_validated_results<-get_multimir(org="hsa",
+                                   mirna=overall_hits,
+                                   table='validated',
+                                   summary=TRUE)
+
+multimir_overall_validated_distinct<-multimir_overall_validated_results@data%>%
+  distinct(mature_mirna_id,target_symbol,.keep_all = TRUE)
+
+miR_335_5p<-multimir_overall_validated_distinct%>%
+   filter(mature_mirna_id=="hsa-miR-335-5p")
+
+listEnrichrSites()
+setEnrichrSite("Enrichr") # Human genes
+websiteLive <- TRUE
+dbs <- listEnrichrDbs()
+
+dbs<-c("GO_Molecular_Function_2015","GO_Cellular_Component_2015", "GO_Biological_Process_2015","KEGG")
+if (websiteLive) {
+    enriched <- enrichr(miR_335_5p$target_symbol, dbs)
+}
+
+if (websiteLive) enriched[["GO_Biological_Process_2015"]]
+pdf("DESeq2/Plots/GO_miR-335-5p.pdf",width=10)
+if (websiteLive) {
+    plotEnrich(enriched[[3]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value",title="GO biological processes enriched among hsa-miR-335-5p targets")
+}
+dev.off()
+
+
+miR_27a_3p<-multimir_overall_validated_distinct%>%
+   filter(mature_mirna_id=="hsa-miR-27a-3p")
+
+listEnrichrSites()
+setEnrichrSite("Enrichr") # Human genes
+websiteLive <- TRUE
+dbs <- listEnrichrDbs()
+
+dbs<-c("GO_Molecular_Function_2015","GO_Cellular_Component_2015", "GO_Biological_Process_2015","KEGG")
+if (websiteLive) {
+    enriched <- enrichr(miR_27a_3p$target_symbol, dbs)
+}
+
+if (websiteLive) enriched[["GO_Biological_Process_2015"]]
+pdf("DESeq2/Plots/GO_miR-27a-3p.pdf",width=10)
+if (websiteLive) {
+    plotEnrich(enriched[[3]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value",title="GO biological processes enriched among hsa-miR-27a-3p targets")
+}
+dev.off()
+
+
+## headache only hits
+headache<-c("hsa-miR-100-5p","hsa-piR-321","hsa-miR-30e-3p","hsa-miR-142-5p")
+multimir_headache_validated_results<-get_multimir(org="hsa",
+                                   mirna=headache,
+                                   table='validated',
+                                   summary=TRUE)
+
+multimir_headache_validated_distinct<-multimir_headache_validated_results@data%>%
+  distinct(mature_mirna_id,target_symbol,.keep_all = TRUE)
+
+miR_100_5p<-multimir_headache_validated_distinct%>%
+   filter(mature_mirna_id=="hsa-miR-100-5p")
+
+listEnrichrSites()
+setEnrichrSite("Enrichr") # Human genes
+websiteLive <- TRUE
+dbs <- listEnrichrDbs()
+
+dbs<-c("GO_Molecular_Function_2015","GO_Cellular_Component_2015", "GO_Biological_Process_2015","KEGG")
+if (websiteLive) {
+    enriched <- enrichr(miR_100_5p$target_symbol, dbs)
+}
+
+if (websiteLive) enriched[["GO_Biological_Process_2015"]]
+pdf("DESeq2/Plots/GO_miR-100-5p.pdf",width=10)
+if (websiteLive) {
+    plotEnrich(enriched[[3]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value",title="GO biological processes enriched among hsa-miR-100-5p targets")
+}
+dev.off()
+
+```
+
+
+## plot expression differences for genes of interest
+```{r}
+#overall hit
+
+miR_335_5p_exp<-as.data.frame(assay(vsd)[rownames(vsd)=="hsa-miR-335-5p",])
+miR_335_5p_exp<-miR_335_5p_exp%>%
+  rownames_to_column(var="bam")%>%
+  left_join(Covariates)%>%
+  dplyr::rename(miR_335_5p=2)
+
+pdf("DESeq2/Plots/miR_335_5p.pdf")
+miR_335_5p_exp%>%
+ggplot(.,aes(x=combined_group,y=miR_335_5p))+
+  geom_jitter(width=0.05,alpha=0.5)+
+  stat_summary(geom="point",fun="mean",shape=23,fill="#E7298A",size=6)+
+  theme_bw()+
+  labs(title="miR-335-5p expression across groups",y="log normalized counts")+
+  scale_x_discrete(breaks=c("Normotensive_No","Preeclampsia_No","Preeclampsia_Yes"),
+        labels=c("Normotensive", "Preeclampsia (-H)", "Preeclampsia (+H)"))+
+  theme(axis.title.x=element_blank(),
+        axis.title.y=element_text(size=14),
+        axis.text=element_text(size=12))
+dev.off()
+
+miR_27a_exp<-as.data.frame(assay(vsd)[rownames(vsd)=="hsa-miR-27a-3p",])
+miR_27a_exp<-miR_27a_exp%>%
+  rownames_to_column(var="bam")%>%
+  left_join(Covariates)%>%
+  dplyr::rename(miR_27a=2)
+
+pdf("DESeq2/Plots/miR_27a.pdf")
+miR_27a_exp%>%
+ggplot(.,aes(x=combined_group,y=miR_27a))+
+  geom_jitter(width=0.05,alpha=0.5)+
+  stat_summary(geom="point",fun="mean",shape=23,fill="#E7298A",size=6)+
+  theme_bw()+
+  labs(title="miR-27a-3p expression across groups",y="log normalized counts")+
+  scale_x_discrete(breaks=c("Normotensive_No","Preeclampsia_No","Preeclampsia_Yes"),
+        labels=c("Normotensive", "Preeclampsia (-H)", "Preeclampsia (+H)"))+
+  theme(axis.title.x=element_blank(),
+        axis.title.y=element_text(size=14),
+        axis.text=element_text(size=12))
+dev.off()
+
+#headache-specific hit
+miR_100_5p_exp<-as.data.frame(assay(vsd)[rownames(vsd)=="hsa-miR-100-5p",])
+miR_100_5p_exp<-miR_100_5p_exp%>%
+  rownames_to_column(var="bam")%>%
+  left_join(Covariates)%>%
+  dplyr::rename(miR_100_5p=2)
+
+pdf("DESeq2/Plots/miR_100_5p.pdf")
+miR_100_5p_exp%>%
+ggplot(.,aes(x=combined_group,y=miR_100_5p))+
+  geom_jitter(width=0.05,alpha=0.5)+
+  stat_summary(geom="point",fun="mean",shape=23,fill="#E7298A",size=6)+
+  theme_bw()+
+  labs(title="miR-100-5p expression across groups",y="log normalized counts")+
+  scale_x_discrete(breaks=c("Normotensive_No","Preeclampsia_No","Preeclampsia_Yes"),
+        labels=c("Normotensive", "Preeclampsia (-H)", "Preeclampsia (+H)"))+
+  theme(axis.title.x=element_blank(),
+        axis.title.y=element_text(size=14),
+        axis.text=element_text(size=12))
+dev.off()
+
+piR_32186_exp<-as.data.frame(assay(vsd)[rownames(vsd)=="hsa-piR-32186",])
+piR_32186_exp<-piR_32186_exp%>%
+  rownames_to_column(var="bam")%>%
+  left_join(Covariates)%>%
+  dplyr::rename(piR_32186=2)
+
+pdf("DESeq2/Plots/piR_32186.pdf")
+piR_32186_exp%>%
+ggplot(.,aes(x=combined_group,y=piR_32186))+
+  geom_jitter(width=0.05,alpha=0.5)+
+  stat_summary(geom="point",fun="mean",shape=23,fill="#E7298A",size=6)+
+  theme_bw()+
+  labs(title="piR-32186 expression across groups",y="log normalized counts")+
+  scale_x_discrete(breaks=c("Normotensive_No","Preeclampsia_No","Preeclampsia_Yes"),
+        labels=c("Normotensive", "Preeclampsia (-H)", "Preeclampsia (+H)"))+
+  theme(axis.title.x=element_blank(),
+        axis.title.y=element_text(size=14),
+        axis.text=element_text(size=12))
+dev.off()
+
+miR_30e_3p_exp<-as.data.frame(assay(vsd)[rownames(vsd)=="hsa-miR-30e-3p",])
+miR_30e_3p_exp<-miR_30e_3p_exp%>%
+  rownames_to_column(var="bam")%>%
+  left_join(Covariates)%>%
+  dplyr::rename(miR_30e_3p=2)
+
+pdf("DESeq2/Plots/miR_30e_3p.pdf")
+miR_30e_3p_exp%>%
+ggplot(.,aes(x=combined_group,y=miR_30e_3p))+
+  geom_jitter(width=0.05,alpha=0.5)+
+  stat_summary(geom="point",fun="mean",shape=23,fill="#E7298A",size=6)+
+  theme_bw()+
+  labs(title="miR-30e-3p expression across groups",y="log normalized counts")+
+  scale_x_discrete(breaks=c("Normotensive_No","Preeclampsia_No","Preeclampsia_Yes"),
+        labels=c("Normotensive", "Preeclampsia (-H)", "Preeclampsia (+H)"))+
+  theme(axis.title.x=element_blank(),
+        axis.title.y=element_text(size=14),
+        axis.text=element_text(size=12))
+dev.off()
+
+miR_142_5p_exp<-as.data.frame(assay(vsd)[rownames(vsd)=="hsa-miR-142-5p",])
+miR_142_5p_exp<-miR_142_5p_exp%>%
+  rownames_to_column(var="bam")%>%
+  left_join(Covariates)%>%
+  dplyr::rename(miR_142_5p=2)
+
+pdf("DESeq2/Plots/miR_142_5p.pdf")
+miR_142_5p_exp%>%
+ggplot(.,aes(x=combined_group,y=miR_142_5p))+
+  geom_jitter(width=0.05,alpha=0.5)+
+  stat_summary(geom="point",fun="mean",shape=23,fill="#E7298A",size=6)+
+  theme_bw()+
+  labs(title="miR-142-5p expression across groups",y="log normalized counts")+
+  scale_x_discrete(breaks=c("Normotensive_No","Preeclampsia_No","Preeclampsia_Yes"),
+        labels=c("Normotensive", "Preeclampsia (-H)", "Preeclampsia (+H)"))+
+  theme(axis.title.x=element_blank(),
+        axis.title.y=element_text(size=14),
+        axis.text=element_text(size=12))
+dev.off()
+
+
+
+```
+
