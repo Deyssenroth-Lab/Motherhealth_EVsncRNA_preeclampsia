@@ -1,7 +1,9 @@
 # Ignore working scripts and output
 *.rds
 *.RMD
+*.html
 
 # Ignore R temporary files
 .Rhistory
-.Rsubread_featureCouunts_pie15328
+.Rsubread_featureCounts_pid15328
+.gitignore
